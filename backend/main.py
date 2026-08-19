@@ -197,7 +197,7 @@ async def summarize(text: str) -> tuple[str, bool]:
 
 async def synthesize(text: str) -> bytes:
     region = setting("AZURE_SPEECH_REGION", "AZURE_SPEECH_REGION.txt")
-    voice = os.getenv("AZURE_VOICE_NAME", "vi-VN-HoaiMyNeural")
+    voice = os.getenv("AZURE_VOICE_NAME", "vi-VN-NamMinhNeural")
     ssml = (
         '<speak version="1.0" xml:lang="vi-VN">'
         f'<voice name="{html.escape(voice)}">{html.escape(text)}</voice></speak>'
