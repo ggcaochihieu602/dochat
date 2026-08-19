@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import html
 import io
 import logging
 import os
@@ -196,30 +195,28 @@ async def summarize(text: str) -> tuple[str, bool]:
 
 
 async def synthesize(text: str) -> bytes:
-    region = setting("AZURE_SPEECH_REGION", "AZURE_SPEECH_REGION.txt")
-    voice = os.getenv("AZURE_VOICE_NAME", "vi-VN-NamMinhNeural")
-    ssml = (
-        '<speak version="1.0" xml:lang="vi-VN">'
-        f'<voice name="{html.escape(voice)}">{html.escape(text)}</voice></speak>'
-    )
+    token = setting("VIETTEL_TTS_TOKEN")
+    voice = os.getenv("VIETTEL_TTS_VOICE", "hn-quynhanh")
+    speed = float(os.getenv("VIETTEL_TTS_SPEED", "1.0"))
+    use_filter = os.getenv("VIETTEL_TTS_FILTER", "false").lower() == "true"
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
-                f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1",
-                content=ssml.encode("utf-8"),
-                headers={
-                    "Ocp-Apim-Subscription-Key": setting(
-                        "AZURE_SPEECH_KEY", "AZURE_SPEECH_KEY.txt"
-                    ),
-                    "Content-Type": "application/ssml+xml",
-                    "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+                "https://viettelai.vn/tts/speech_synthesis",
+                json={
+                    "text": text,
+                    "voice": voice,
+                    "speed": speed,
+                    "tts_return_option": 3,
+                    "token": token,
+                    "without_filter": not use_filter,
                 },
             )
         if response.is_error or not response.content:
-            raise ExternalServiceError("Azure Speech request failed")
+            raise ExternalServiceError("Viettel AI TTS request failed")
         return response.content
     except httpx.HTTPError as error:
-        raise ExternalServiceError("Azure Speech request failed") from error
+        raise ExternalServiceError("Viettel AI TTS request failed") from error
 
 
 async def send_text(chat_id: int, text: str) -> None:
