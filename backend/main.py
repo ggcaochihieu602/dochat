@@ -7,7 +7,6 @@ import logging
 import os
 import time
 import uuid
-from functools import cmp_to_key
 from pathlib import Path
 from typing import Literal
 
@@ -262,34 +261,26 @@ def _region_bbox(region: list[tuple]) -> tuple:
 
 
 def _order_items(items: list[tuple], page_width: float, group_lines: bool) -> str:
-    """Region-based reading order: aligned regions left-to-right, inside each top-to-bottom."""
-    regions = _cluster_regions(items, page_width)
-    regions.sort(
-        key=cmp_to_key(lambda a, b: _region_cmp(_region_bbox(a), _region_bbox(b)))
-    )
-    parts: list[str] = []
-    for region in regions:
-        region.sort(key=lambda item: (item[1], item[0]))
-        if group_lines:
-            lines: list[list[tuple]] = []
-            for item in region:
-                if not lines:
-                    lines.append([item])
-                    continue
-                previous = lines[-1]
-                previous_bottom = max(entry[3] for entry in previous)
-                if item[1] <= previous_bottom + 4:
-                    previous.append(item)
-                else:
-                    lines.append([item])
-            lines_text: list[str] = []
-            for line in lines:
-                line.sort(key=lambda entry: entry[0])
-                lines_text.append(" ".join(entry[4] for entry in line))
-            parts.append("\n".join(lines_text))
+    """Reading order: top-to-bottom, left-to-right within each line."""
+    items.sort(key=lambda item: (item[1], item[0]))
+    if not group_lines:
+        return "\n".join(item[4] for item in items)
+    lines: list[list[tuple]] = []
+    for item in items:
+        if not lines:
+            lines.append([item])
+            continue
+        previous = lines[-1]
+        previous_bottom = max(entry[3] for entry in previous)
+        if item[1] <= previous_bottom + 4:
+            previous.append(item)
         else:
-            parts.append("\n".join(item[4] for item in region))
-    return "\n\n".join(parts)
+            lines.append([item])
+    parts: list[str] = []
+    for line in lines:
+        line.sort(key=lambda entry: entry[0])
+        parts.append(" ".join(entry[4] for entry in line))
+    return "\n".join(parts)
 
 
 def ocr_reconstruct(image: Image.Image) -> str:
@@ -302,7 +293,7 @@ def ocr_reconstruct(image: Image.Image) -> str:
             confidence = int(data["conf"][index] or 0)
         except (ValueError, TypeError):
             confidence = 0
-        if not text or confidence < 5:
+        if not text or confidence < 10:
             continue
         left, top, width, height = (
             data["left"][index],

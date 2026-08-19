@@ -30,6 +30,7 @@ const DENIED_MESSAGE = "Bot này chỉ dành cho người được cấp quyền
 const STATE_TTL_SECONDS = 3600;
 const JOB_TTL_SECONDS = 86400;
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
+const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 
 const NORMALIZE_PROMPT = `Thêm dấu câu và xuống dòng cho văn bản tiếng Việt sau. KHÔNG thêm bớt từ ngữ. Chỉ xuất văn bản đã thêm dấu, không giải thích.
 
@@ -100,6 +101,41 @@ async function setMode(env: Env, userId: number, chatId: number, mode: Mode): Pr
     chat_id: chatId,
     text: "Ngài gửi văn bản, PDF tối đa 2 trang hoặc một ảnh cho tôi.",
   });
+}
+
+async function downloadTelegramFile(env: Env, fileId: string): Promise<Uint8Array> {
+  const file = await telegram<{ file_path: string }>(env, "getFile", { file_id: fileId });
+  const url = `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Failed to download file");
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+async function visionOcr(env: Env, imageBytes: Uint8Array): Promise<string> {
+  const base64 = btoa(
+    Array.from(imageBytes)
+      .map((b) => String.fromCharCode(b))
+      .join(""),
+  );
+  const result = await env.AI.run(VISION_MODEL, {
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: `data:image/png;base64,${base64}` },
+          },
+          {
+            type: "text",
+            text: "Đây là ảnh chụp tài liệu tiếng Việt. Hãy trích xuất TOÀN BỘ văn bản từ ảnh này. Xuất ra DUY NHẤT phần văn bản đã trích xuất, giữ nguyên thứ tự đọc (trên xuống, trái qua phải), không giải thích, không bình luận.",
+          },
+        ],
+      },
+    ],
+    max_tokens: 4096,
+  });
+  return (result as { response?: string }).response || "";
 }
 
 async function handleCallback(update: any, env: Env): Promise<void> {
@@ -311,6 +347,34 @@ async function handleMessage(update: any, env: Env): Promise<void> {
     return;
   }
 
+  let finalSource = source;
+
+  if (source.source_type === "image" && source.file_id) {
+    await telegram(env, "sendMessage", {
+      chat_id: chatId,
+      text: "Trợ lý Dochat đang đọc ảnh bằng AI...",
+    });
+    try {
+      const imageBytes = await downloadTelegramFile(env, source.file_id);
+      const ocrText = await visionOcr(env, imageBytes);
+      if (!ocrText || ocrText.trim().length < 10) {
+        await telegram(env, "sendMessage", {
+          chat_id: chatId,
+          text: "Trợ lý Dochat chưa đọc rõ nội dung ảnh. Ngài vui lòng gửi ảnh rõ ràng hơn.",
+        });
+        return;
+      }
+      finalSource = { source_type: "direct_text", text: ocrText };
+    } catch (error) {
+      console.error("vision_ocr_failed", error);
+      await telegram(env, "sendMessage", {
+        chat_id: chatId,
+        text: "Trợ lý Dochat chưa thể đọc ảnh này. Ngài vui lòng thử lại.",
+      });
+      return;
+    }
+  }
+
   const jobKey = `job:${update.update_id}`;
   if (await env.CONVERSATIONS.get(jobKey)) return;
   const status = await telegram<{ message_id: number }>(env, "sendMessage", {
@@ -321,10 +385,10 @@ async function handleMessage(update: any, env: Env): Promise<void> {
     update_id: update.update_id,
     chat_id: chatId,
     user_id: userId,
-    source_type: source.source_type,
+    source_type: finalSource.source_type,
     mode: state.mode,
-    file_id: source.file_id,
-    text: source.text,
+    file_id: finalSource.file_id,
+    text: finalSource.text,
     status_message_id: status.message_id,
   };
   await env.CONVERSATIONS.put(jobKey, "queued", { expirationTtl: JOB_TTL_SECONDS });
@@ -368,7 +432,7 @@ export default {
         env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct-fast",
         {
           messages: [{ role: "user", content: normalizePrompt(text) }],
-          max_new_tokens: 4096,
+    max_tokens: 4096,
         },
       );
       return Response.json({ text: (result as { response?: string }).response || "" });
