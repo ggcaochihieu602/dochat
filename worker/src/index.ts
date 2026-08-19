@@ -45,7 +45,8 @@ Nhiệm vụ chung:
 - Xác định ranh giới câu: nếu dòng tiếp theo vẫn là một phần của câu hiện tại thì nối liền bằng dấu cách; nếu câu đã kết thúc thì thêm dấu chấm (.), dấu chấm hỏi (?) hoặc dấu chấm than (!) cho phù hợp.
 - Thêm dấu phẩy hoặc chấm phẩy ở những chỗ cần ngắt nghỉ tự nhiên mà văn bản gốc còn thiếu.
 - Dùng dấu xuống dòng để tách các đoạn lớn.
-- Giữ NGUYÊN VẸN toàn bộ nội dung: không viết lại, không tóm tắt, không thêm bớt từ ngữ, không thay đổi thứ tự.
+- Giữ NGUYÊN VẸN toàn bộ nội dung: không viết lại, không tóm tắt, không thêm bớt từ ngữ, không thay đổi số liệu, tên riêng hay chữ viết tắt.
+- Vì ảnh chụp 2 cột có thể làm các thành phần tiêu đề bị lẫn thứ tự, ngài CÓ THỂ sắp xếp lại các thành phần tiêu đề (tên cơ quan, quốc hiệu - tiêu ngữ, số ký hiệu, địa danh ngày tháng, tiêu đề) cho đúng trình tự quy chuẩn. Phần nội dung chính phải giữ đúng thứ tự.
 - Xuất ra DUY NHẤT văn bản đã chuẩn hóa, không kèm lời giải thích, không kèm lời dẫn.
 
 Văn bản:

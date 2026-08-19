@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import uuid
+from functools import cmp_to_key
 from pathlib import Path
 from typing import Literal
 
@@ -207,10 +208,93 @@ def ocr_image(data: bytes) -> str:
         raise PermanentJobError("Ảnh không hợp lệ hoặc có độ phân giải quá lớn.") from error
 
 
+def _region_cmp(a: tuple, b: tuple) -> int:
+    """Order two region boxes: left-to-right when aligned, top-to-bottom when stacked."""
+    a_y0, a_y1, a_x0 = a[1], a[3], a[0]
+    b_y0, b_y1, b_x0 = b[1], b[3], b[0]
+    if not (a_y1 < b_y0 or b_y1 < a_y0):
+        if a_x0 < b_x0:
+            return -1
+        if b_x0 < a_x0:
+            return 1
+        return (a_y0 > b_y0) - (a_y0 < b_y0)
+    if a_y1 <= b_y0:
+        return -1
+    return 1
+
+
+def _cluster_regions(items: list[tuple], page_width: float) -> list[list[tuple]]:
+    """Split items into left/right regions by the widest vertical column gap."""
+    if not items:
+        return []
+    wide = [item for item in items if item[2] - item[0] > 0.55 * page_width]
+    narrow = [item for item in items if item[2] - item[0] <= 0.55 * page_width]
+    regions: list[list[tuple]] = []
+    if narrow:
+        centers = sorted((item[0] + item[2]) / 2 for item in narrow)
+        span = centers[-1] - centers[0]
+        best_gap, best_index = -1.0, -1
+        if len(centers) >= 2:
+            gaps = [
+                (centers[index + 1] - centers[index], index)
+                for index in range(len(centers) - 1)
+            ]
+            best_gap, best_index = max(gaps, key=lambda gap: gap[0])
+        if best_index >= 0 and best_gap > 0.35 * span and best_gap > 0.08 * page_width:
+            boundary = (centers[best_index] + centers[best_index + 1]) / 2
+            left = [item for item in narrow if (item[0] + item[2]) / 2 < boundary]
+            right = [item for item in narrow if (item[0] + item[2]) / 2 >= boundary]
+            regions = [left, right] if left and right else [narrow]
+        else:
+            regions = [narrow]
+    regions.extend([[item] for item in wide])
+    return regions
+
+
+def _region_bbox(region: list[tuple]) -> tuple:
+    return (
+        min(item[0] for item in region),
+        min(item[1] for item in region),
+        max(item[2] for item in region),
+        max(item[3] for item in region),
+    )
+
+
+def _order_items(items: list[tuple], page_width: float, group_lines: bool) -> str:
+    """Region-based reading order: aligned regions left-to-right, inside each top-to-bottom."""
+    regions = _cluster_regions(items, page_width)
+    regions.sort(
+        key=cmp_to_key(lambda a, b: _region_cmp(_region_bbox(a), _region_bbox(b)))
+    )
+    parts: list[str] = []
+    for region in regions:
+        region.sort(key=lambda item: (item[1], item[0]))
+        if group_lines:
+            lines: list[list[tuple]] = []
+            for item in region:
+                if not lines:
+                    lines.append([item])
+                    continue
+                previous = lines[-1]
+                previous_bottom = max(entry[3] for entry in previous)
+                if item[1] <= previous_bottom + 4:
+                    previous.append(item)
+                else:
+                    lines.append([item])
+            lines_text: list[str] = []
+            for line in lines:
+                line.sort(key=lambda entry: entry[0])
+                lines_text.append(" ".join(entry[4] for entry in line))
+            parts.append("\n".join(lines_text))
+        else:
+            parts.append("\n".join(item[4] for item in region))
+    return "\n\n".join(parts)
+
+
 def ocr_reconstruct(image: Image.Image) -> str:
-    """OCR with geometric reading-order reconstruction for multi-column documents."""
+    """OCR with region-based reading-order reconstruction for multi-column documents."""
     data = pytesseract.image_to_data(image, lang="vie+eng", output_type=pytesseract.Output.DICT)
-    words: list[dict] = []
+    words: list[tuple] = []
     for index, raw in enumerate(data.get("text", [])):
         text = (raw or "").strip()
         try:
@@ -225,37 +309,24 @@ def ocr_reconstruct(image: Image.Image) -> str:
             data["width"][index],
             data["height"][index],
         )
-        words.append(
-            {"text": text, "x0": left, "y0": top, "x1": left + width, "y1": top + height}
-        )
+        words.append((float(left), float(top), float(left + width), float(top + height), text))
     if not words:
         return ""
-    words.sort(key=lambda word: (word["y0"], word["x0"]))
-    lines: list[list[dict]] = []
-    for word in words:
-        if not lines:
-            lines.append([word])
-            continue
-        previous = lines[-1]
-        previous_bottom = max(item["y1"] for item in previous)
-        if word["y0"] <= previous_bottom + 4:
-            previous.append(word)
-            previous.sort(key=lambda item: item["x0"])
-        else:
-            lines.append([word])
-    return "\n".join(" ".join(item["text"] for item in line) for line in lines)
+    page_width = max(word[2] for word in words)
+    return _order_items(words, page_width, group_lines=True)
 
 
 def extract_pdf_text(page) -> str:
     """Reconstruct reading order from positioned text blocks (handles 2-column layouts)."""
-    items: list[tuple[float, float, str]] = []
+    items: list[tuple] = []
     for block in page.get_text("blocks"):
-        x0, y0, _x1, _y1, text, *_ = block
+        x0, y0, x1, y1, text, *_ = block
         text = clean_text(text)
         if text:
-            items.append((round(float(y0), 1), float(x0), text))
-    items.sort(key=lambda item: (item[0], item[1]))
-    return "\n".join(item[2] for item in items)
+            items.append((float(x0), float(y0), float(x1), float(y1), text))
+    if not items:
+        return ""
+    return _order_items(items, page.rect.width, group_lines=False)
 
 
 def extract_pdf(data: bytes) -> str:
