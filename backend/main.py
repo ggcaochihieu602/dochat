@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 import time
@@ -40,12 +41,37 @@ _IN_FLIGHT: set[int] = set()
 _OUTPUT_SENT: set[int] = set()
 _JOB_LOCK = asyncio.Lock()
 
+_PENDING_TTL_SECONDS = 30 * 60
+_PENDING: dict[int, tuple[dict, float]] = {}
+
 
 def _prune_results() -> None:
     now = time.monotonic()
     stale = [key for key, (_, created) in _RESULTS.items() if now - created > _RESULT_TTL_SECONDS]
     for key in stale:
         del _RESULTS[key]
+
+
+def _prune_pending() -> None:
+    now = time.monotonic()
+    stale = [key for key, (_, created) in _PENDING.items() if now - created > _PENDING_TTL_SECONDS]
+    for key in stale:
+        del _PENDING[key]
+
+
+def _get_pending(update_id: int) -> dict | None:
+    _prune_pending()
+    pending = _PENDING.get(update_id)
+    return pending[0] if pending else None
+
+
+def _set_pending(update_id: int, value: dict) -> None:
+    _prune_pending()
+    _PENDING[update_id] = (value, time.monotonic())
+
+
+def _del_pending(update_id: int) -> None:
+    _PENDING.pop(update_id, None)
 
 
 def _get_result(update_id: int) -> dict | None:
@@ -92,6 +118,8 @@ class Job(BaseModel):
     file_id: str | None = None
     text: str | None = None
     status_message_id: int | None = None
+    approved: bool = False
+    parent_update_id: int | None = None
 
 
 def setting(name: str, local_file: str | None = None) -> str:
@@ -378,6 +406,61 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
     if x_internal_secret != setting("INTERNAL_SECRET"):
         raise HTTPException(401, "Unauthorized")
 
+    if job.approved:
+        parent = job.parent_update_id or job.update_id
+        pending = _get_pending(parent)
+        if pending is None:
+            await telegram(
+                "sendMessage",
+                chat_id=job.chat_id,
+                text="Phiên xử lý đã hết hạn. Ngài vui lòng gửi lại tài liệu.",
+            )
+            return {"status": "completed"}
+        cached = _get_result(job.update_id)
+        if cached is not None:
+            return cached
+        if not await _claim_job(job.update_id):
+            for _ in range(240):
+                cached = _get_result(job.update_id)
+                if cached is not None:
+                    return cached
+                await asyncio.sleep(0.5)
+            return {"status": "completed"}
+        work = job.model_copy(
+            update={
+                "source_type": "direct_text",
+                "text": pending["text"],
+                "mode": pending["mode"],
+                "status_message_id": pending["status_message_id"],
+            }
+        )
+        error_id = uuid.uuid4().hex[:6].upper()
+        try:
+            await edit_status(work, "Trợ lý Dochat đang tạo giọng nói...")
+            _OUTPUT_SENT.add(work.update_id)
+            await send_audio(work.chat_id, work.text or "")
+            await edit_status(work, "Trợ lý Dochat đã xử lý xong.")
+            _del_pending(parent)
+            result = {"status": "completed"}
+            _set_result(work.update_id, result)
+            return result
+        except PermanentJobError as error:
+            result = {
+                "status": "rejected",
+                "user_message": str(error),
+                "error_id": error_id,
+            }
+            _set_result(work.update_id, result)
+            return result
+        except Exception as error:
+            logger.error("job_failed error_id=%s type=%s", error_id, type(error).__name__)
+            if work.update_id in _OUTPUT_SENT:
+                _set_result(work.update_id, {"status": "completed"})
+                return {"status": "completed"}
+            raise HTTPException(503, f"Processing failed: {error_id}") from None
+        finally:
+            await _release_job(work.update_id)
+
     cached = _get_result(job.update_id)
     if cached is not None:
         return cached
@@ -419,13 +502,42 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
             _OUTPUT_SENT.add(job.update_id)
             await send_text(job.chat_id, final_text)
         else:
-            await edit_status(job, "Trợ lý Dochat đang tạo giọng nói...")
-            if job.mode == "summary_audio" and not summary_failed:
-                _OUTPUT_SENT.add(job.update_id)
-                await send_text(job.chat_id, final_text)
+            await edit_status(job, "Trợ lý Dochat đang chuẩn bị văn bản...")
             audio_text = await normalize_text(final_text)
-            _OUTPUT_SENT.add(job.update_id)
-            await send_audio(job.chat_id, audio_text)
+            for part in split_text(audio_text):
+                await telegram("sendMessage", chat_id=job.chat_id, text=part)
+            await telegram(
+                "sendMessage",
+                chat_id=job.chat_id,
+                text="Trợ lý Dochat đã đọc xong văn bản. Ngài xác nhận tạo giọng đọc?",
+                reply_markup=json.dumps(
+                    {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "Đồng ý tạo giọng đọc",
+                                    "callback_data": f"job:approve:{job.update_id}:{job.mode}",
+                                },
+                                {
+                                    "text": "Hủy",
+                                    "callback_data": f"job:reject:{job.update_id}:{job.mode}",
+                                },
+                            ]
+                        ]
+                    }
+                ),
+            )
+            _set_pending(
+                job.update_id,
+                {
+                    "text": audio_text,
+                    "mode": job.mode,
+                    "status_message_id": job.status_message_id,
+                },
+            )
+            result = {"status": "awaiting_approval"}
+            _set_result(job.update_id, result)
+            return result
 
         await edit_status(job, "Trợ lý Dochat đã xử lý xong.")
         result = {"status": "completed"}

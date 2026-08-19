@@ -22,6 +22,8 @@ type Job = {
   file_id?: string;
   text?: string;
   status_message_id?: number;
+  approved?: boolean;
+  parent_update_id?: number;
 };
 
 const DENIED_MESSAGE = "Bot này chỉ dành cho người được cấp quyền";
@@ -124,6 +126,44 @@ async function handleCallback(update: any, env: Env): Promise<void> {
     return;
   }
   await telegram(env, "answerCallbackQuery", { callback_query_id: query.id });
+
+  const jobMatch = /^job:(approve|reject):(\d+):(\w+)$/.exec(query.data);
+  if (jobMatch) {
+    const action = jobMatch[1];
+    const parentUpdateId = Number(jobMatch[2]);
+    const mode = jobMatch[3] as Mode;
+    if (action === "approve") {
+      const job: Job = {
+        update_id: Date.now(),
+        parent_update_id: parentUpdateId,
+        chat_id: chatId,
+        user_id: query.from.id,
+        source_type: "direct_text",
+        mode,
+        approved: true,
+      };
+      await env.JOBS.send(job);
+      await telegram(env, "answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: "Đã nhận. Trợ lý Dochat đang tạo giọng nói...",
+      });
+    } else {
+      await telegram(env, "answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: "Đã hủy.",
+      });
+    }
+    try {
+      await telegram(env, "editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: query.message.message_id,
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch {
+      // Already acknowledged; ignore.
+    }
+    return;
+  }
 
   switch (query.data) {
     case "action:read":
@@ -396,7 +436,7 @@ export default {
         });
         if (response.ok) {
           const result = (await response.json()) as {
-            status: "completed" | "rejected";
+            status: "completed" | "rejected" | "awaiting_approval";
             user_message?: string;
             error_id?: string;
           };
