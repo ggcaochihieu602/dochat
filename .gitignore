@@ -3,6 +3,7 @@
 !.env.example
 *.txt
 !SUMMARY_PROMPT.md
+!requirements.txt
 __pycache__/
 .pytest_cache/
 .venv/
