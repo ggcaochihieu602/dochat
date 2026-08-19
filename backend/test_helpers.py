@@ -1,4 +1,4 @@
-from .helpers import split_for_tts, split_text
+from .helpers import split_for_tts, split_text, strip_special_symbols
 
 
 def test_split_text_respects_limit():
@@ -19,3 +19,29 @@ def test_tts_split_breaks_one_oversized_sentence_without_losing_words():
     parts = split_for_tts(text, max_words=10, max_chars=1000)
     assert [len(part.split()) for part in parts] == [10, 10, 5]
     assert " ".join(parts) == text
+
+
+def test_strip_special_symbols_removes_emoji_and_symbols_keeps_vietnamese():
+    text = "Xin chào 🎉 thế giới! ✔ Đây là bài test 😀 100% đúng. @#$%^&*"
+    result = strip_special_symbols(text)
+    assert "🎉" not in result
+    assert "✔" not in result
+    assert "😀" not in result
+    assert "@" not in result and "#" not in result and "&" not in result
+    assert "Xin chào" in result
+    assert "thế giới" in result
+    assert "Đây là bài test" in result
+    assert "100" in result and "đúng" in result
+
+
+def test_strip_special_symbols_keeps_basic_punctuation():
+    text = 'Xin chào, "thế giới"! Tôi tên là Nguyễn Văn A — rất vui được gặp ngài.'
+    result = strip_special_symbols(text)
+    assert "," in result and "!" in result and '"' in result
+    assert "Nguyễn Văn A" in result
+
+
+def test_tts_split_strips_emoji_from_voice_text():
+    parts = split_for_tts("Chào bạn 👋 hôm nay trời đẹp.", max_words=10, max_chars=100)
+    assert all("👋" not in part for part in parts)
+    assert parts == ["Chào bạn hôm nay trời đẹp."]

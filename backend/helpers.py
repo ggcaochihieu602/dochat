@@ -1,10 +1,29 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 MAX_FILE_BYTES = 15 * 1024 * 1024
 MAX_PDF_PAGES = 2
+
+_ALLOWED_VOICE_PUNCT = set(".,!?…;:'\"()-–—/%")
+
+
+def strip_special_symbols(value: str) -> str:
+    """Keep only letters, digits, combining marks, whitespace and basic punctuation."""
+    cleaned = [
+        char
+        for char in value
+        if char.isspace()
+        or char.isalnum()
+        or unicodedata.combining(char) != 0
+        or char in _ALLOWED_VOICE_PUNCT
+    ]
+    result = "".join(cleaned)
+    result = re.sub(r"[ \t]+", " ", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
 
 
 def split_text(text: str, limit: int = 3500) -> list[str]:
@@ -14,7 +33,9 @@ def split_text(text: str, limit: int = 3500) -> list[str]:
 
 def split_for_tts(text: str, max_words: int = 600, max_chars: int = 5000) -> list[str]:
     """Split at sentence boundaries before synthesis so every MP3 is valid."""
-    return _split_by_boundaries(text, max_words=max_words, max_chars=max_chars)
+    return _split_by_boundaries(
+        strip_special_symbols(text), max_words=max_words, max_chars=max_chars
+    )
 
 
 def _split_by_boundaries(

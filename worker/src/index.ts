@@ -183,6 +183,15 @@ async function handleMessage(update: any, env: Env): Promise<void> {
   if (!message?.from || !message.chat) return;
   const userId = message.from.id as number;
   const chatId = message.chat.id as number;
+  console.log("message_from", { userId, chatId, allowed: isAllowed(userId, env), type: message.chat.type });
+  const command =
+    typeof message.text === "string" && message.text.trim().startsWith("/")
+      ? commandOf(message.text)
+      : "";
+  if (command === "/myid") {
+    await telegram(env, "sendMessage", { chat_id: chatId, text: `ID Telegram của ngài là: ${userId}` });
+    return;
+  }
 
   if (!isAllowed(userId, env)) {
     await telegram(env, "sendMessage", { chat_id: chatId, text: DENIED_MESSAGE });
@@ -196,7 +205,6 @@ async function handleMessage(update: any, env: Env): Promise<void> {
     return;
   }
 
-  const command = typeof message.text === "string" ? commandOf(message.text) : "";
   if (command === "/start") {
     await env.CONVERSATIONS.delete(`state:${userId}`);
     await showHome(env, chatId);
@@ -323,7 +331,11 @@ export default {
     if (update.update_id === undefined) return Response.json({ ok: true });
     const updateKey = `update:${update.update_id}`;
     if (await env.CONVERSATIONS.get(updateKey)) return Response.json({ ok: true });
-    await handleUpdate(update, env);
+    try {
+      await handleUpdate(update, env);
+    } catch (error) {
+      console.error("webhook_handle_failed", error);
+    }
     await env.CONVERSATIONS.put(updateKey, "handled", { expirationTtl: JOB_TTL_SECONDS });
     return Response.json({ ok: true });
   },
