@@ -31,26 +31,12 @@ const STATE_TTL_SECONDS = 3600;
 const JOB_TTL_SECONDS = 86400;
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
-const NORMALIZE_PROMPT = `Ngài là trợ lý chuẩn hóa văn bản tiếng Việt để đọc thành giọng nói. Đây là văn bản lấy từ OCR hoặc tài liệu, các dòng có thể bị ngắt tùy ý, thiếu dấu câu cuối câu, và có thể là văn bản hành chính 2 cột bị trộn lẫn.
-
-Nếu văn bản là văn bản hành chính Việt Nam, hãy nhận diện và tách rõ các thành phần sau, mỗi thành phần là một dòng/đoạn riêng, theo đúng trình tự:
-1. Tên cơ quan ban hành (ví dụ: CỤC KHÍ TƯỢNG THỦY VĂN, TRUNG TÂM DỰ BÁO...)
-2. Quốc hiệu và tiêu ngữ: "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM" và "Độc lập - Tự do - Hạnh phúc"
-3. Số, ký hiệu văn bản (ví dụ: Số: 123/QĐ-XXX)
-4. Địa danh, ngày tháng năm (ví dụ: Hà Nội, ngày 15 tháng 8 năm 2026)
-5. Tiêu đề văn bản
-6. Nội dung chính
-
-Nhiệm vụ chung:
-- Xác định ranh giới câu: nếu dòng tiếp theo vẫn là một phần của câu hiện tại thì nối liền bằng dấu cách; nếu câu đã kết thúc thì thêm dấu chấm (.), dấu chấm hỏi (?) hoặc dấu chấm than (!) cho phù hợp.
-- Thêm dấu phẩy hoặc chấm phẩy ở những chỗ cần ngắt nghỉ tự nhiên mà văn bản gốc còn thiếu.
-- Dùng dấu xuống dòng để tách các đoạn lớn.
-- Giữ NGUYÊN VẸN toàn bộ nội dung: không viết lại, không tóm tắt, không thêm bớt từ ngữ, không thay đổi số liệu, tên riêng hay chữ viết tắt.
-- Vì ảnh chụp 2 cột có thể làm các thành phần tiêu đề bị lẫn thứ tự, ngài CÓ THỂ sắp xếp lại các thành phần tiêu đề (tên cơ quan, quốc hiệu - tiêu ngữ, số ký hiệu, địa danh ngày tháng, tiêu đề) cho đúng trình tự quy chuẩn. Phần nội dung chính phải giữ đúng thứ tự.
-- Xuất ra DUY NHẤT văn bản đã chuẩn hóa, không kèm lời giải thích, không kèm lời dẫn.
+const NORMALIZE_PROMPT = `Thêm dấu câu và xuống dòng cho văn bản tiếng Việt sau. KHÔNG thêm bớt từ ngữ. Chỉ xuất văn bản đã thêm dấu, không giải thích.
 
 Văn bản:
-${"{{DOCUMENT_TEXT}}"}`;
+${"{{DOCUMENT_TEXT}}"}
+
+Văn bản đã thêm dấu câu:`;
 
 export function normalizePrompt(text: string): string {
   return NORMALIZE_PROMPT.replace("{{DOCUMENT_TEXT}}", text);

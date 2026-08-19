@@ -544,8 +544,9 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
         error_id = uuid.uuid4().hex[:6].upper()
         try:
             await edit_status(work, "Trợ lý Dochat đang tạo giọng nói...")
+            audio_text = await normalize_text(work.text or "")
             _OUTPUT_SENT.add(work.update_id)
-            await send_audio(work.chat_id, work.text or "")
+            await send_audio(work.chat_id, audio_text)
             await edit_status(work, "Trợ lý Dochat đã xử lý xong.")
             _del_pending(parent)
             result = {"status": "completed"}
@@ -610,8 +611,7 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
             await send_text(job.chat_id, final_text)
         else:
             await edit_status(job, "Trợ lý Dochat đang chuẩn bị văn bản...")
-            audio_text = await normalize_text(final_text)
-            for part in split_text(audio_text):
+            for part in split_text(final_text):
                 await telegram("sendMessage", chat_id=job.chat_id, text=part)
             await telegram(
                 "sendMessage",
@@ -637,7 +637,7 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
             _set_pending(
                 job.update_id,
                 {
-                    "text": audio_text,
+                    "text": final_text,
                     "mode": job.mode,
                     "status_message_id": job.status_message_id,
                 },
