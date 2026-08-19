@@ -208,58 +208,6 @@ def ocr_image(data: bytes) -> str:
         raise PermanentJobError("Ảnh không hợp lệ hoặc có độ phân giải quá lớn.") from error
 
 
-def _region_cmp(a: tuple, b: tuple) -> int:
-    """Order two region boxes: left-to-right when aligned, top-to-bottom when stacked."""
-    a_y0, a_y1, a_x0 = a[1], a[3], a[0]
-    b_y0, b_y1, b_x0 = b[1], b[3], b[0]
-    if not (a_y1 < b_y0 or b_y1 < a_y0):
-        if a_x0 < b_x0:
-            return -1
-        if b_x0 < a_x0:
-            return 1
-        return (a_y0 > b_y0) - (a_y0 < b_y0)
-    if a_y1 <= b_y0:
-        return -1
-    return 1
-
-
-def _cluster_regions(items: list[tuple], page_width: float) -> list[list[tuple]]:
-    """Split items into left/right regions by the widest vertical column gap."""
-    if not items:
-        return []
-    wide = [item for item in items if item[2] - item[0] > 0.55 * page_width]
-    narrow = [item for item in items if item[2] - item[0] <= 0.55 * page_width]
-    regions: list[list[tuple]] = []
-    if narrow:
-        centers = sorted((item[0] + item[2]) / 2 for item in narrow)
-        span = centers[-1] - centers[0]
-        best_gap, best_index = -1.0, -1
-        if len(centers) >= 2:
-            gaps = [
-                (centers[index + 1] - centers[index], index)
-                for index in range(len(centers) - 1)
-            ]
-            best_gap, best_index = max(gaps, key=lambda gap: gap[0])
-        if best_index >= 0 and best_gap > 0.35 * span and best_gap > 0.08 * page_width:
-            boundary = (centers[best_index] + centers[best_index + 1]) / 2
-            left = [item for item in narrow if (item[0] + item[2]) / 2 < boundary]
-            right = [item for item in narrow if (item[0] + item[2]) / 2 >= boundary]
-            regions = [left, right] if left and right else [narrow]
-        else:
-            regions = [narrow]
-    regions.extend([[item] for item in wide])
-    return regions
-
-
-def _region_bbox(region: list[tuple]) -> tuple:
-    return (
-        min(item[0] for item in region),
-        min(item[1] for item in region),
-        max(item[2] for item in region),
-        max(item[3] for item in region),
-    )
-
-
 def _order_items(items: list[tuple], page_width: float, group_lines: bool) -> str:
     """Reading order: top-to-bottom, left-to-right within each line."""
     items.sort(key=lambda item: (item[1], item[0]))
