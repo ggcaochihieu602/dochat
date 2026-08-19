@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from .helpers import (
     MAX_FILE_BYTES,
     MAX_PDF_PAGES,
+    chunk_text_for_normalize,
     clean_text,
     load_prompt,
     split_for_tts,
@@ -235,6 +236,33 @@ async def summarize(text: str) -> tuple[str, bool]:
         return text, True
 
 
+async def normalize_text(text: str) -> str:
+    """Add missing sentence punctuation before TTS; keep content unchanged."""
+    provider = os.getenv(
+        "NORMALIZE_PROVIDER_URL",
+        setting("SUMMARY_PROVIDER_URL").replace("/internal/summarize", "/internal/normalize"),
+    )
+    try:
+        parts: list[str] = []
+        for chunk in chunk_text_for_normalize(text):
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(
+                    provider,
+                    json={"text": chunk},
+                    headers={"X-Internal-Secret": setting("INTERNAL_SECRET")},
+                )
+            if response.is_error:
+                raise ExternalServiceError("Normalize provider failed")
+            normalized = response.json().get("text", "").strip()
+            if not normalized:
+                raise ExternalServiceError("Normalize provider returned no text")
+            parts.append(normalized)
+        result = clean_text("\n\n".join(parts))
+        return result or text
+    except Exception:
+        return text
+
+
 async def synthesize(text: str) -> bytes:
     token = setting("VIETTEL_TTS_TOKEN")
     voice = os.getenv("VIETTEL_TTS_VOICE", "hn-quynhanh")
@@ -346,8 +374,9 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
             if job.mode == "summary_audio" and not summary_failed:
                 _OUTPUT_SENT.add(job.update_id)
                 await send_text(job.chat_id, final_text)
+            audio_text = await normalize_text(final_text)
             _OUTPUT_SENT.add(job.update_id)
-            await send_audio(job.chat_id, final_text)
+            await send_audio(job.chat_id, audio_text)
 
         await edit_status(job, "Trợ lý Dochat đã xử lý xong.")
         result = {"status": "completed"}

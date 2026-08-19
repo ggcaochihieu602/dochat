@@ -26,6 +26,27 @@ def strip_special_symbols(value: str) -> str:
     return result.strip()
 
 
+def chunk_text_for_normalize(text: str, limit: int = 6000) -> list[str]:
+    """Split text on line boundaries into chunks that fit the model context."""
+    text = clean_text(text)
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    for line in text.split("\n"):
+        if not line.strip():
+            continue
+        if len("\n".join((*current, line))) > limit and current:
+            chunks.append("\n".join(current))
+            current = []
+        current.append(line)
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
 def split_text(text: str, limit: int = 3500) -> list[str]:
     """Split text into Telegram-safe messages without losing content."""
     return _split_by_boundaries(text, max_chars=limit)

@@ -1,4 +1,9 @@
-from .helpers import split_for_tts, split_text, strip_special_symbols
+from .helpers import (
+    chunk_text_for_normalize,
+    split_for_tts,
+    split_text,
+    strip_special_symbols,
+)
 
 
 def test_split_text_respects_limit():
@@ -45,3 +50,18 @@ def test_tts_split_strips_emoji_from_voice_text():
     parts = split_for_tts("Chào bạn 👋 hôm nay trời đẹp.", max_words=10, max_chars=100)
     assert all("👋" not in part for part in parts)
     assert parts == ["Chào bạn hôm nay trời đẹp."]
+
+
+def test_chunk_text_for_normalize_single_chunk_when_short():
+    text = "Dòng một\nDòng hai kết thúc câu."
+    chunks = chunk_text_for_normalize(text)
+    assert chunks == ["Dòng một\nDòng hai kết thúc câu."]
+
+
+def test_chunk_text_for_normalize_splits_long_text_without_losing_lines():
+    lines = [f"Tiêu đề {i}" for i in range(50)]
+    text = "\n".join(lines)
+    chunks = chunk_text_for_normalize(text, limit=300)
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 300 for chunk in chunks)
+    assert sum(chunk.count("\n") + 1 for chunk in chunks) == len(lines)
