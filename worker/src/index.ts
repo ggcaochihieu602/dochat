@@ -380,7 +380,10 @@ export default {
       if (!text) return new Response("Invalid request", { status: 400 });
       const result = await env.AI.run(
         env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct-fast",
-        { messages: [{ role: "user", content: normalizePrompt(text) }] },
+        {
+          messages: [{ role: "user", content: normalizePrompt(text) }],
+          max_new_tokens: 4096,
+        },
       );
       return Response.json({ text: (result as { response?: string }).response || "" });
     }
@@ -389,11 +392,17 @@ export default {
       if (request.headers.get("X-Internal-Secret") !== env.INTERNAL_SECRET) {
         return new Response("Unauthorized", { status: 401 });
       }
-      const { prompt } = (await request.json()) as { prompt?: string };
+       const { prompt, max_tokens } = (await request.json()) as {
+        prompt?: string;
+        max_tokens?: number;
+      };
       if (!prompt) return new Response("Invalid request", { status: 400 });
       const result = await env.AI.run(
         env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct-fast",
-        { messages: [{ role: "user", content: prompt }] },
+        {
+          messages: [{ role: "user", content: prompt }],
+          max_new_tokens: max_tokens ?? 1024,
+        },
       );
       return Response.json({ text: (result as { response?: string }).response || "" });
     }

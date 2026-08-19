@@ -23,6 +23,7 @@ from .helpers import (
     MAX_FILE_BYTES,
     MAX_PDF_PAGES,
     chunk_text_for_normalize,
+    chunk_text_for_summary,
     clean_text,
     load_prompt,
     split_for_tts,
@@ -195,7 +196,7 @@ def decode_text_file(data: bytes) -> str:
 
 def prepare_image(image: Image.Image) -> Image.Image:
     image = ImageOps.exif_transpose(image)
-    image.thumbnail((2400, 2400))
+    image.thumbnail((4000, 4000))
     grayscale = ImageOps.grayscale(image)
     return ImageEnhance.Contrast(grayscale).enhance(1.5)
 
@@ -301,7 +302,7 @@ def ocr_reconstruct(image: Image.Image) -> str:
             confidence = int(data["conf"][index] or 0)
         except (ValueError, TypeError):
             confidence = 0
-        if not text or confidence < 20:
+        if not text or confidence < 5:
             continue
         left, top, width, height = (
             data["left"][index],
@@ -364,19 +365,54 @@ def extract(data: bytes, source_type: str) -> str:
     return result
 
 
+SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "18000"))
+CONSOLIDATE_PROMPT = (
+    "Ngài là trợ lý tóm tắt. Hãy gộp các đoạn tóm tắt phụ sau thành một bản tóm tắt "
+    "duy nhất, mạch lạc, bằng tiếng Việt, phù hợp đọc giọng nói. Giữ chính xác ngày tháng, "
+    "thời hạn, số tiền, số ký hiệu và các yêu cầu quan trọng; không thêm thông tin mới, "
+    "không bịa đặt, không dùng bảng/Markdown. Nếu một đoạn tóm tắt có nói 'không có thông tin', "
+    "giữ nguyên. Độ dài không vượt quá 650 từ.\n\nCác đoạn tóm tắt phụ:\n{{DOCUMENT_TEXT}}"
+)
+
+
+async def _summarize_one(prompt: str, provider: str, secret: str, max_tokens: int) -> str:
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            provider,
+            json={"prompt": prompt, "max_tokens": max_tokens},
+            headers={"X-Internal-Secret": secret},
+        )
+    if response.is_error:
+        raise ExternalServiceError("Summary provider failed")
+    return clean_text(response.json().get("text", ""))
+
+
 async def summarize(text: str) -> tuple[str, bool]:
     try:
-        prompt_path = Path(os.getenv("SUMMARY_PROMPT_PATH", str(ROOT / "SUMMARY_PROMPT.md")))
-        prompt = load_prompt(prompt_path).replace("{{DOCUMENT_TEXT}}", text)
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                setting("SUMMARY_PROVIDER_URL"),
-                json={"prompt": prompt},
-                headers={"X-Internal-Secret": setting("INTERNAL_SECRET")},
+        template = load_prompt(
+            Path(os.getenv("SUMMARY_PROMPT_PATH", str(ROOT / "SUMMARY_PROMPT.md")))
+        )
+        provider = setting("SUMMARY_PROVIDER_URL")
+        secret = setting("INTERNAL_SECRET")
+        summaries: list[str] = []
+        for chunk in chunk_text_for_summary(text, SUMMARY_CHUNK_CHARS):
+            partial = await _summarize_one(
+                template.replace("{{DOCUMENT_TEXT}}", chunk), provider, secret, 1024
             )
-        if response.is_error:
-            raise ExternalServiceError("Summary provider failed")
-        result = clean_text(response.json().get("text", ""))
+            if partial:
+                summaries.append(partial)
+        if not summaries:
+            raise ExternalServiceError("Summary provider returned no text")
+        if len(summaries) == 1:
+            result = summaries[0]
+        else:
+            combined = "\n\n".join(summaries)
+            result = await _summarize_one(
+                CONSOLIDATE_PROMPT.replace("{{DOCUMENT_TEXT}}", combined),
+                provider,
+                secret,
+                4096,
+            )
         if not result:
             raise ExternalServiceError("Summary provider returned no text")
         return result, False

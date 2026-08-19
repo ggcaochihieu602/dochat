@@ -47,6 +47,51 @@ def chunk_text_for_normalize(text: str, limit: int = 6000) -> list[str]:
     return chunks
 
 
+def chunk_text_for_summary(text: str, limit: int = 18000) -> list[str]:
+    """Split text into paragraph-respecting chunks no longer than `limit` characters."""
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    for block in re.split(r"\n\s*\n", text):
+        block = block.strip()
+        if not block:
+            continue
+        if len(block) > limit:
+            # An oversize paragraph: split by words without dropping content.
+            for chunk in _split_words_to_limit(block, limit):
+                chunks.append(chunk)
+            continue
+        if current and len("\n\n".join((*current, block))) > limit:
+            chunks.append("\n\n".join(current))
+            current = []
+        current.append(block)
+    if current:
+        chunks.append("\n\n".join(current))
+    return chunks
+
+
+def _split_words_to_limit(text: str, limit: int) -> list[str]:
+    """Greedy word-boundary split so every chunk is no longer than `limit`."""
+    words = text.split()
+    if not words:
+        return []
+    chunks: list[str] = []
+    current: list[str] = []
+    for word in words:
+        if current and len(" ".join((*current, word))) > limit:
+            chunks.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+    return chunks
+
+
 def split_text(text: str, limit: int = 3500) -> list[str]:
     """Split text into Telegram-safe messages without losing content."""
     return _split_by_boundaries(text, max_chars=limit)
