@@ -1,0 +1,24 @@
+name = "dochat-telegram"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+BACKEND_URL = "https://your-service.onrender.com"
+ALLOWED_USER_IDS = "851987991"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
+
+[[kv_namespaces]]
+binding = "CONVERSATIONS"
+id = "2d2249374988480299ac9c02d93a9a9d"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "dochat-jobs"
+
+[[queues.consumers]]
+queue = "dochat-jobs"
+max_batch_size = 1
+max_retries = 3
+
+[ai]
+binding = "AI"

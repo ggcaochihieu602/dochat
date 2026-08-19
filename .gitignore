@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+*.txt
+!SUMMARY_PROMPT.md
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+.wrangler/
+dist/
