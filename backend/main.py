@@ -4,6 +4,7 @@ import asyncio
 import io
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -31,6 +32,46 @@ Image.MAX_IMAGE_PIXELS = 30_000_000
 logger = logging.getLogger("dochat")
 
 app = FastAPI(title="Dochat processing backend")
+
+_RESULT_TTL_SECONDS = 30 * 60
+_RESULTS: dict[int, tuple[dict, float]] = {}
+_IN_FLIGHT: set[int] = set()
+_OUTPUT_SENT: set[int] = set()
+_JOB_LOCK = asyncio.Lock()
+
+
+def _prune_results() -> None:
+    now = time.monotonic()
+    stale = [key for key, (_, created) in _RESULTS.items() if now - created > _RESULT_TTL_SECONDS]
+    for key in stale:
+        del _RESULTS[key]
+
+
+def _get_result(update_id: int) -> dict | None:
+    _prune_results()
+    cached = _RESULTS.get(update_id)
+    return cached[0] if cached else None
+
+
+def _set_result(update_id: int, result: dict) -> None:
+    _prune_results()
+    _RESULTS[update_id] = (result, time.monotonic())
+
+
+async def _claim_job(update_id: int) -> bool:
+    """Return True if this request should run the job, False if it must wait."""
+    async with _JOB_LOCK:
+        if update_id in _RESULTS:
+            return False
+        if update_id in _IN_FLIGHT:
+            return False
+        _IN_FLIGHT.add(update_id)
+        return True
+
+
+async def _release_job(update_id: int) -> None:
+    async with _JOB_LOCK:
+        _IN_FLIGHT.discard(update_id)
 
 
 class PermanentJobError(Exception):
@@ -260,6 +301,18 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
     if x_internal_secret != setting("INTERNAL_SECRET"):
         raise HTTPException(401, "Unauthorized")
 
+    cached = _get_result(job.update_id)
+    if cached is not None:
+        return cached
+
+    if not await _claim_job(job.update_id):
+        for _ in range(240):
+            cached = _get_result(job.update_id)
+            if cached is not None:
+                return cached
+            await asyncio.sleep(0.5)
+        return {"status": "completed"}
+
     error_id = uuid.uuid4().hex[:6].upper()
     try:
         await edit_status(job, "Trợ lý Dochat đang đọc nội dung...")
@@ -286,21 +339,33 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
                 )
 
         if job.mode == "summary_text":
+            _OUTPUT_SENT.add(job.update_id)
             await send_text(job.chat_id, final_text)
         else:
             await edit_status(job, "Trợ lý Dochat đang tạo giọng nói...")
             if job.mode == "summary_audio" and not summary_failed:
+                _OUTPUT_SENT.add(job.update_id)
                 await send_text(job.chat_id, final_text)
+            _OUTPUT_SENT.add(job.update_id)
             await send_audio(job.chat_id, final_text)
 
         await edit_status(job, "Trợ lý Dochat đã xử lý xong.")
-        return {"status": "completed"}
+        result = {"status": "completed"}
+        _set_result(job.update_id, result)
+        return result
     except PermanentJobError as error:
-        return {
+        result = {
             "status": "rejected",
             "user_message": str(error),
             "error_id": error_id,
         }
+        _set_result(job.update_id, result)
+        return result
     except Exception as error:
         logger.error("job_failed error_id=%s type=%s", error_id, type(error).__name__)
+        if job.update_id in _OUTPUT_SENT:
+            _set_result(job.update_id, {"status": "completed"})
+            return {"status": "completed"}
         raise HTTPException(503, f"Processing failed: {error_id}") from None
+    finally:
+        await _release_job(job.update_id)
