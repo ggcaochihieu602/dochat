@@ -29,6 +29,30 @@ const STATE_TTL_SECONDS = 3600;
 const JOB_TTL_SECONDS = 86400;
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
+const NORMALIZE_PROMPT = `Ngài là trợ lý chuẩn hóa văn bản tiếng Việt để đọc thành giọng nói. Đây là văn bản lấy từ OCR hoặc tài liệu, các dòng có thể bị ngắt tùy ý, thiếu dấu câu cuối câu, và có thể là văn bản hành chính 2 cột bị trộn lẫn.
+
+Nếu văn bản là văn bản hành chính Việt Nam, hãy nhận diện và tách rõ các thành phần sau, mỗi thành phần là một dòng/đoạn riêng, theo đúng trình tự:
+1. Tên cơ quan ban hành (ví dụ: CỤC KHÍ TƯỢNG THỦY VĂN, TRUNG TÂM DỰ BÁO...)
+2. Quốc hiệu và tiêu ngữ: "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM" và "Độc lập - Tự do - Hạnh phúc"
+3. Số, ký hiệu văn bản (ví dụ: Số: 123/QĐ-XXX)
+4. Địa danh, ngày tháng năm (ví dụ: Hà Nội, ngày 15 tháng 8 năm 2026)
+5. Tiêu đề văn bản
+6. Nội dung chính
+
+Nhiệm vụ chung:
+- Xác định ranh giới câu: nếu dòng tiếp theo vẫn là một phần của câu hiện tại thì nối liền bằng dấu cách; nếu câu đã kết thúc thì thêm dấu chấm (.), dấu chấm hỏi (?) hoặc dấu chấm than (!) cho phù hợp.
+- Thêm dấu phẩy hoặc chấm phẩy ở những chỗ cần ngắt nghỉ tự nhiên mà văn bản gốc còn thiếu.
+- Dùng dấu xuống dòng để tách các đoạn lớn.
+- Giữ NGUYÊN VẸN toàn bộ nội dung: không viết lại, không tóm tắt, không thêm bớt từ ngữ, không thay đổi thứ tự.
+- Xuất ra DUY NHẤT văn bản đã chuẩn hóa, không kèm lời giải thích, không kèm lời dẫn.
+
+Văn bản:
+${"{{DOCUMENT_TEXT}}"}`;
+
+export function normalizePrompt(text: string): string {
+  return NORMALIZE_PROMPT.replace("{{DOCUMENT_TEXT}}", text);
+}
+
 export function parseAllowedUserIds(value: string): Set<number> {
   return new Set(
     value
@@ -307,6 +331,19 @@ async function updateStatus(env: Env, job: Job, text: string): Promise<void> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/internal/normalize" && request.method === "POST") {
+      if (request.headers.get("X-Internal-Secret") !== env.INTERNAL_SECRET) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+      const { text } = (await request.json()) as { text?: string };
+      if (!text) return new Response("Invalid request", { status: 400 });
+      const result = await env.AI.run(
+        env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct-fast",
+        { messages: [{ role: "user", content: normalizePrompt(text) }] },
+      );
+      return Response.json({ text: (result as { response?: string }).response || "" });
+    }
+
     if (url.pathname === "/internal/summarize" && request.method === "POST") {
       if (request.headers.get("X-Internal-Secret") !== env.INTERNAL_SECRET) {
         return new Response("Unauthorized", { status: 401 });

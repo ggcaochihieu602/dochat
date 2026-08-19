@@ -174,11 +174,60 @@ def prepare_image(image: Image.Image) -> Image.Image:
 def ocr_image(data: bytes) -> str:
     try:
         with Image.open(io.BytesIO(data)) as image:
-            return clean_text(
-                pytesseract.image_to_string(prepare_image(image), lang="vie+eng")
-            )
+            return clean_text(ocr_reconstruct(prepare_image(image)))
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as error:
         raise PermanentJobError("Ảnh không hợp lệ hoặc có độ phân giải quá lớn.") from error
+
+
+def ocr_reconstruct(image: Image.Image) -> str:
+    """OCR with geometric reading-order reconstruction for multi-column documents."""
+    data = pytesseract.image_to_data(image, lang="vie+eng", output_type=pytesseract.Output.DICT)
+    words: list[dict] = []
+    for index, raw in enumerate(data.get("text", [])):
+        text = (raw or "").strip()
+        try:
+            confidence = int(data["conf"][index] or 0)
+        except (ValueError, TypeError):
+            confidence = 0
+        if not text or confidence < 20:
+            continue
+        left, top, width, height = (
+            data["left"][index],
+            data["top"][index],
+            data["width"][index],
+            data["height"][index],
+        )
+        words.append(
+            {"text": text, "x0": left, "y0": top, "x1": left + width, "y1": top + height}
+        )
+    if not words:
+        return ""
+    words.sort(key=lambda word: (word["y0"], word["x0"]))
+    lines: list[list[dict]] = []
+    for word in words:
+        if not lines:
+            lines.append([word])
+            continue
+        previous = lines[-1]
+        previous_bottom = max(item["y1"] for item in previous)
+        if word["y0"] <= previous_bottom + 4:
+            previous.append(word)
+            previous.sort(key=lambda item: item["x0"])
+        else:
+            lines.append([word])
+    return "\n".join(" ".join(item["text"] for item in line) for line in lines)
+
+
+def extract_pdf_text(page) -> str:
+    """Reconstruct reading order from positioned text blocks (handles 2-column layouts)."""
+    items: list[tuple[float, float, str]] = []
+    for block in page.get_text("blocks"):
+        x0, y0, _x1, _y1, text, *_ = block
+        text = clean_text(text)
+        if text:
+            items.append((round(float(y0), 1), float(x0), text))
+    items.sort(key=lambda item: (item[0], item[1]))
+    return "\n".join(item[2] for item in items)
 
 
 def extract_pdf(data: bytes) -> str:
@@ -188,7 +237,7 @@ def extract_pdf(data: bytes) -> str:
                 raise PermanentJobError("PDF chỉ được tối đa 2 trang.")
             pages: list[str] = []
             for page in document:
-                text = clean_text(page.get_text("text"))
+                text = clean_text(extract_pdf_text(page))
                 if len(text) < 80:
                     pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                     text = ocr_image(pixmap.tobytes("png"))
