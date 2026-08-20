@@ -584,7 +584,11 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
         )
         if job.source_type == "image":
             extracted, ocr_confidence = await asyncio.to_thread(ocr_image_with_confidence, raw)
-            if ocr_confidence < 68 or looks_like_ocr_failure(extracted):
+            # Confidence alone is not enough to replace OCR: generative Vision
+            # models can produce fluent but spatially scrambled documents.
+            # Keep Tesseract as the source of truth whenever it returned a
+            # substantial document; use Vision only for an actual OCR failure.
+            if looks_like_ocr_failure(extracted):
                 await edit_status(job, "Trợ lý Dochat đang kiểm tra lại bố cục ảnh...")
                 try:
                     repaired = await vision_repair(raw)
