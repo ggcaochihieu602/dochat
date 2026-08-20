@@ -243,8 +243,13 @@ def _order_items(items: list[tuple], page_width: float, group_lines: bool) -> st
 
 
 def ocr_reconstruct(image: Image.Image) -> tuple[str, float]:
-    """OCR with region-based reading-order reconstruction for multi-column documents."""
-    data = pytesseract.image_to_data(image, lang="vie+eng", output_type=pytesseract.Output.DICT)
+    """OCR using Tesseract's block/paragraph/line order instead of y/x only."""
+    data = pytesseract.image_to_data(
+        image,
+        lang="vie+eng",
+        config="--oem 3 --psm 3",
+        output_type=pytesseract.Output.DICT,
+    )
     words: list[tuple] = []
     for index, raw in enumerate(data.get("text", [])):
         text = (raw or "").strip()
@@ -262,12 +267,47 @@ def ocr_reconstruct(image: Image.Image) -> tuple[str, float]:
             data["width"][index],
             data["height"][index],
         )
-        words.append((float(left), float(top), float(left + width), float(top + height), text, confidence))
+        words.append(
+            (
+                int(data.get("block_num", [0])[index] or 0),
+                int(data.get("par_num", [0])[index] or 0),
+                int(data.get("line_num", [0])[index] or 0),
+                int(data.get("word_num", [0])[index] or 0),
+                float(left),
+                float(top),
+                float(left + width),
+                float(top + height),
+                text,
+                confidence,
+            )
+        )
     if not words:
         return "", 0.0
-    page_width = max(word[2] for word in words)
-    result = _order_items(words, page_width, group_lines=True)
-    average_confidence = sum(word[5] for word in words) / len(words)
+
+    # Tesseract's hierarchy is much more reliable than using a vertical
+    # tolerance: the latter merges nearby bold headings and adjacent columns.
+    lines: dict[tuple[int, int, int], list[tuple]] = {}
+    for word in words:
+        lines.setdefault(word[:3], []).append(word)
+    line_items: list[tuple] = []
+    for (block_num, par_num, line_num), line_words in lines.items():
+        line_words.sort(key=lambda item: item[3])
+        line_items.append(
+            (
+                block_num,
+                par_num,
+                line_num,
+                min(item[4] for item in line_words),
+                min(item[5] for item in line_words),
+                max(item[6] for item in line_words),
+                max(item[7] for item in line_words),
+                " ".join(item[8] for item in line_words),
+            )
+        )
+
+    line_items.sort(key=lambda item: (item[0], item[1], item[2]))
+    result = "\n".join(item[7] for item in line_items)
+    average_confidence = sum(word[9] for word in words) / len(words)
     return result, average_confidence
 
 
