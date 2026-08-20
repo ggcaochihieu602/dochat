@@ -433,7 +433,7 @@ async def send_audio(chat_id: int, text: str) -> None:
                 response = await client.post(
                     telegram_url("sendAudio"),
                     data={"chat_id": str(chat_id), "caption": caption},
-                    files={"audio": (f"dochat-{index}.mp3", audio, "audio/mpeg")},
+                    files={"audio": (f"thongbao-{index}.mp3", audio, "audio/mpeg")},
                 )
             payload = response.json()
             if response.is_error or not payload.get("ok"):
