@@ -32,7 +32,10 @@ const JOB_TTL_SECONDS = 86400;
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const VISION_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
 
-const NORMALIZE_PROMPT = `Thêm dấu câu và xuống dòng cho văn bản tiếng Việt sau. KHÔNG thêm bớt từ ngữ. Chỉ xuất văn bản đã thêm dấu, không giải thích.
+const NORMALIZE_PROMPT = `Bạn chỉ được thêm dấu câu và xuống dòng cho văn bản tiếng Việt sau.
+Giữ nguyên tuyệt đối mọi từ, số, tên riêng, thứ tự từ và nội dung. KHÔNG được sửa chính tả,
+viết lại, rút gọn, thêm, xóa hoặc di chuyển bất kỳ từ nào. Chỉ xuất văn bản đã thêm dấu câu,
+không giải thích và không lặp lại hướng dẫn.
 
 Văn bản:
 ${"{{DOCUMENT_TEXT}}"}

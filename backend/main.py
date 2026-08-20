@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -433,6 +434,10 @@ async def normalize_text(text: str) -> str:
             normalized = response.json().get("text", "").strip()
             if not normalized:
                 raise ExternalServiceError("Normalize provider returned no text")
+            source_tokens = re.findall(r"[\wÀ-ỹ]+", chunk, flags=re.UNICODE)
+            result_tokens = re.findall(r"[\wÀ-ỹ]+", normalized, flags=re.UNICODE)
+            if source_tokens != result_tokens:
+                raise ExternalServiceError("Normalize provider changed document words")
             parts.append(normalized)
         result = clean_text("\n\n".join(parts))
         return result or text
@@ -537,7 +542,9 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
         error_id = uuid.uuid4().hex[:6].upper()
         try:
             await edit_status(work, "Trợ lý Dochat đang tạo giọng nói...")
-            audio_text = await normalize_text(work.text or "")
+            # The text was normalized before the approval message was sent.
+            # Synthesize exactly what the user reviewed.
+            audio_text = work.text or ""
             _OUTPUT_SENT.add(work.update_id)
             await send_audio(work.chat_id, audio_text)
             await edit_status(work, "Trợ lý Dochat đã xử lý xong.")
@@ -613,6 +620,9 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
                         "Tôi sẽ gửi lại nội dung nguyên văn cho ngài."
                     ),
                 )
+
+        await edit_status(job, "Trợ lý Dochat đang thêm dấu câu...")
+        final_text = await normalize_text(final_text)
 
         if job.mode == "summary_text":
             _OUTPUT_SENT.add(job.update_id)
