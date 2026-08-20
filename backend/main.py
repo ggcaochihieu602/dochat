@@ -26,6 +26,8 @@ from .helpers import (
     chunk_text_for_normalize,
     chunk_text_for_summary,
     clean_text,
+    add_punctuation_to_document_headers,
+    expand_administrative_abbreviations,
     load_prompt,
     split_for_tts,
     split_text,
@@ -701,6 +703,8 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
                 )
 
         await edit_status(job, "Trợ lý Dochat đang thêm dấu câu...")
+        final_text = expand_administrative_abbreviations(final_text)
+        final_text = add_punctuation_to_document_headers(final_text)
         final_text = await normalize_text(final_text)
 
         if job.mode == "summary_text":

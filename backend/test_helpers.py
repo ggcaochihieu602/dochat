@@ -1,9 +1,29 @@
 from .helpers import (
+    add_punctuation_to_document_headers,
     chunk_text_for_normalize,
+    expand_administrative_abbreviations,
     split_for_tts,
     split_text,
     strip_special_symbols,
 )
+
+
+def test_expands_unambiguous_administrative_abbreviations():
+    text = "BCH. HỘI ND XÃ CÁT NGẠN phối hợp với UBND xã và MTTQ. TM. BAN THƯỜNG VỤ - Lưu VP"
+    result = expand_administrative_abbreviations(text)
+    assert "Ban Chấp hành Hội Nông dân xã CÁT NGẠN" in result
+    assert "Ủy ban nhân dân" in result
+    assert "Mặt trận Tổ quốc" in result
+    assert "Thay mặt" in result
+    assert "Lưu Văn phòng" in result
+
+
+def test_adds_pauses_only_to_headers_and_bullets():
+    text = "GIẤY MỜI\nDự Lễ trao mô hình nuôi dê thương phẩm\n- Đại diện UBND xã"
+    result = add_punctuation_to_document_headers(text)
+    assert "GIẤY MỜI," in result
+    assert "Dự Lễ trao mô hình nuôi dê thương phẩm," in result
+    assert "- Đại diện UBND xã;" in result
 
 
 def test_split_text_respects_limit():

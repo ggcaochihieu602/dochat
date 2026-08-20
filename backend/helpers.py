@@ -7,6 +7,58 @@ from pathlib import Path
 MAX_FILE_BYTES = 15 * 1024 * 1024
 MAX_PDF_PAGES = 2
 
+
+_ADMIN_ABBREVIATIONS = (
+    # Context-safe organization and signing abbreviations.
+    (re.compile(r"\bHỘI\s+ND\b", re.IGNORECASE), "Hội Nông dân"),
+    (re.compile(r"\bMTTQ\b", re.IGNORECASE), "Mặt trận Tổ quốc"),
+    (re.compile(r"\bUBND\b", re.IGNORECASE), "Ủy ban nhân dân"),
+    (re.compile(r"\bHĐND\b", re.IGNORECASE), "Hội đồng nhân dân"),
+    (re.compile(r"\bĐBQH\b", re.IGNORECASE), "Đại biểu Quốc hội"),
+    (re.compile(r"\bBCH\.(?=\s|$)", re.IGNORECASE), "Ban Chấp hành"),
+    (re.compile(r"\bBCH\b", re.IGNORECASE), "Ban Chấp hành"),
+    (re.compile(r"\bTM\.(?=\s|$)", re.IGNORECASE), "Thay mặt"),
+    (re.compile(r"\bKT\.(?=\s|$)", re.IGNORECASE), "Ký thay"),
+    (re.compile(r"\bTL\.(?=\s|$)", re.IGNORECASE), "Thừa lệnh"),
+    (re.compile(r"\bTUQ\.(?=\s|$)", re.IGNORECASE), "Thừa ủy quyền"),
+    (re.compile(r"(?i)(?<=Lưu\s)VP\b"), "Văn phòng"),
+)
+
+
+def expand_administrative_abbreviations(value: str) -> str:
+    """Expand only unambiguous administrative abbreviations for reading/TTS."""
+    result = value
+    for pattern, replacement in _ADMIN_ABBREVIATIONS:
+        result = pattern.sub(replacement, result)
+    return result
+
+
+def add_punctuation_to_document_headers(value: str) -> str:
+    """Add pauses to short document-header lines without touching paragraph wraps."""
+    lines = value.splitlines()
+    output: list[str] = []
+    header_pattern = re.compile(
+        r"^(Ban Chấp hành|Hội Nông dân|CỘNG HÒA|Độc lập|Số\s*:|"
+        r"[A-ZÀ-Ỹ][A-ZÀ-Ỹ .-]{5,}|[A-ZÀ-Ỹ].*ngày\s+\d+|GIẤY MỜI|"
+        r"Dự Lễ|Nơi nhận|Thay mặt)",
+        re.IGNORECASE,
+    )
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            output.append("")
+            continue
+        if stripped.startswith("-") and not stripped.endswith((";", ".", ":")):
+            stripped += ";"
+        elif (
+            len(stripped) <= 120
+            and header_pattern.match(stripped)
+            and not stripped.endswith((".", ":", ";", ",", "!", "?", "…"))
+        ):
+            stripped += ","
+        output.append(stripped)
+    return "\n".join(output)
+
 _ALLOWED_VOICE_PUNCT = set(".,!?…;:'\"()-–—/%")
 
 
