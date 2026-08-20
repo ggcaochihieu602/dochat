@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import logging
@@ -27,6 +28,7 @@ from .helpers import (
     load_prompt,
     split_for_tts,
     split_text,
+    looks_like_ocr_failure,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -195,15 +197,23 @@ def decode_text_file(data: bytes) -> str:
 
 def prepare_image(image: Image.Image) -> Image.Image:
     image = ImageOps.exif_transpose(image)
-    image.thumbnail((4000, 4000))
+    image.thumbnail((4500, 4500))
+    # Small Telegram photos are a common source of missed Vietnamese diacritics.
+    # Upscale only the short side to avoid unbounded memory use.
+    short_side = min(image.size)
+    if short_side < 1400:
+        scale = min(2.0, 1400 / max(short_side, 1))
+        image = image.resize((round(image.width * scale), round(image.height * scale)), Image.Resampling.LANCZOS)
     grayscale = ImageOps.grayscale(image)
-    return ImageEnhance.Contrast(grayscale).enhance(1.5)
+    grayscale = ImageOps.autocontrast(grayscale, cutoff=1)
+    return ImageEnhance.Contrast(grayscale).enhance(1.35)
 
 
 def ocr_image(data: bytes) -> str:
     try:
         with Image.open(io.BytesIO(data)) as image:
-            return clean_text(ocr_reconstruct(prepare_image(image)))
+            text, _ = ocr_reconstruct(prepare_image(image))
+            return clean_text(text)
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as error:
         raise PermanentJobError("Ảnh không hợp lệ hoặc có độ phân giải quá lớn.") from error
 
@@ -231,17 +241,19 @@ def _order_items(items: list[tuple], page_width: float, group_lines: bool) -> st
     return "\n".join(parts)
 
 
-def ocr_reconstruct(image: Image.Image) -> str:
+def ocr_reconstruct(image: Image.Image) -> tuple[str, float]:
     """OCR with region-based reading-order reconstruction for multi-column documents."""
     data = pytesseract.image_to_data(image, lang="vie+eng", output_type=pytesseract.Output.DICT)
     words: list[tuple] = []
     for index, raw in enumerate(data.get("text", [])):
         text = (raw or "").strip()
         try:
-            confidence = int(data["conf"][index] or 0)
+            # Tesseract returns values such as "96.421234". Using int() here
+            # made valid OCR words look like confidence 0 in the old pipeline.
+            confidence = float(data["conf"][index] or 0)
         except (ValueError, TypeError):
-            confidence = 0
-        if not text or confidence < 10:
+            confidence = 0.0
+        if not text or confidence < 12:
             continue
         left, top, width, height = (
             data["left"][index],
@@ -249,11 +261,13 @@ def ocr_reconstruct(image: Image.Image) -> str:
             data["width"][index],
             data["height"][index],
         )
-        words.append((float(left), float(top), float(left + width), float(top + height), text))
+        words.append((float(left), float(top), float(left + width), float(top + height), text, confidence))
     if not words:
-        return ""
+        return "", 0.0
     page_width = max(word[2] for word in words)
-    return _order_items(words, page_width, group_lines=True)
+    result = _order_items(words, page_width, group_lines=True)
+    average_confidence = sum(word[5] for word in words) / len(words)
+    return result, average_confidence
 
 
 def extract_pdf_text(page) -> str:
@@ -302,6 +316,46 @@ def extract(data: bytes, source_type: str) -> str:
             "Trợ lý Dochat chưa đọc rõ nội dung. Ngài vui lòng gửi ảnh rõ và thẳng hơn."
         )
     return result
+
+
+def ocr_image_with_confidence(data: bytes) -> tuple[str, float]:
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            text, confidence = ocr_reconstruct(prepare_image(image))
+            return clean_text(text), confidence
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as error:
+        raise PermanentJobError("Ảnh không hợp lệ hoặc có độ phân giải quá lớn.") from error
+
+
+async def vision_repair(data: bytes) -> str:
+    """Ask the Worker Vision model only when local OCR is clearly unreliable."""
+    provider = os.getenv("VISION_PROVIDER_URL", "").strip()
+    if not provider:
+        summary_provider = setting("SUMMARY_PROVIDER_URL")
+        provider = summary_provider.rsplit("/", 1)[0] + "/vision-ocr"
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            normalized = io.BytesIO()
+            ImageOps.exif_transpose(image).convert("RGB").save(normalized, format="PNG", optimize=True)
+            encoded = base64.b64encode(normalized.getvalue()).decode("ascii")
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as error:
+        raise PermanentJobError("Ảnh không hợp lệ hoặc có độ phân giải quá lớn.") from error
+    prompt = (
+        "Đây là ảnh tài liệu hành chính tiếng Việt. Hãy tái dựng văn bản để đọc bằng giọng nói. "
+        "Giữ nguyên tiêu đề, tên riêng, ngày tháng, số tiền, số lượng và yêu cầu. "
+        "Bỏ qua quốc hiệu, tiêu ngữ, số hiệu, nơi nhận và chữ ký nếu không phải nội dung chính. "
+        "Nếu có bảng, chuyển thành các dòng có nhãn. Không đoán phần mờ; ghi [KHÔNG RÕ]. "
+        "Chỉ trả về văn bản, không giải thích."
+    )
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(
+            provider,
+            json={"image_base64": encoded, "prompt": prompt},
+            headers={"X-Internal-Secret": setting("INTERNAL_SECRET")},
+        )
+    if response.is_error:
+        raise ExternalServiceError("Vision provider failed")
+    return clean_text(response.json().get("text", ""))
 
 
 SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "18000"))
@@ -528,7 +582,18 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
             if job.source_type == "direct_text"
             else await download_file(job.file_id or "")
         )
-        extracted = await asyncio.to_thread(extract, raw, job.source_type)
+        if job.source_type == "image":
+            extracted, ocr_confidence = await asyncio.to_thread(ocr_image_with_confidence, raw)
+            if ocr_confidence < 68 or looks_like_ocr_failure(extracted):
+                await edit_status(job, "Trợ lý Dochat đang kiểm tra lại bố cục ảnh...")
+                try:
+                    repaired = await vision_repair(raw)
+                    if len(repaired) >= max(40, len(extracted) // 3) and not looks_like_ocr_failure(repaired):
+                        extracted = repaired
+                except Exception as error:
+                    logger.warning("vision_fallback_failed type=%s", type(error).__name__)
+        else:
+            extracted = await asyncio.to_thread(extract, raw, job.source_type)
 
         final_text = extracted
         summary_failed = False

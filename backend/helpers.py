@@ -164,3 +164,20 @@ def clean_text(value: str) -> str:
     value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", value)
     value = re.sub(r"[ \t]+", " ", value)
     return re.sub(r"\n{3,}", "\n\n", value).strip()
+
+
+def looks_like_ocr_failure(text: str) -> bool:
+    """Detect obvious OCR failures without asking an LLM to repair the text."""
+    text = clean_text(text)
+    if len(text) < 40:
+        return True
+    words = re.findall(r"[^\s]+", text)
+    if len(words) < 8:
+        return True
+    letters = sum(char.isalpha() for char in text)
+    digits = sum(char.isdigit() for char in text)
+    if letters == 0 or letters / max(len(text), 1) < 0.35:
+        return True
+    # A page that is almost entirely punctuation/noise is not usable for TTS.
+    noise = len(re.findall(r"[^\w\sÀ-ỹ.,!?;:'\"()/%-]", text, re.UNICODE))
+    return noise > max(12, len(text) // 12) and digits < letters // 4

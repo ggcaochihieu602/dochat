@@ -4,7 +4,7 @@ compatibility_date = "2025-01-01"
 
 [vars]
 BACKEND_URL = "https://dochat1.onrender.com"
-ALLOWED_USER_IDS = "8950411699"
+ALLOWED_USER_IDS = "8950411699,8986495659"
 AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
 
 [[kv_namespaces]]
