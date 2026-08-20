@@ -399,6 +399,43 @@ async def vision_repair(data: bytes) -> str:
     return clean_text(response.json().get("text", ""))
 
 
+async def google_document_ocr(data: bytes) -> str:
+    """Use Google's document OCR when configured; return empty on any failure."""
+    api_key = os.getenv("GOOGLE_VISION_API_KEY", "").strip()
+    if not api_key:
+        return ""
+    encoded = base64.b64encode(data).decode("ascii")
+    payload = {
+        "requests": [
+            {
+                "image": {"content": encoded},
+                "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+                "imageContext": {"languageHints": ["vi"]},
+            }
+        ]
+    }
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            response = await client.post(
+                "https://vision.googleapis.com/v1/images:annotate",
+                params={"key": api_key},
+                json=payload,
+            )
+        if response.is_error:
+            logger.warning("google_vision_failed status=%s", response.status_code)
+            return ""
+        result = response.json()
+        annotation = (result.get("responses") or [{}])[0]
+        error = annotation.get("error") or {}
+        if error:
+            logger.warning("google_vision_failed code=%s", error.get("code"))
+            return ""
+        return clean_text((annotation.get("fullTextAnnotation") or {}).get("text", ""))
+    except (httpx.HTTPError, ValueError) as error:
+        logger.warning("google_vision_failed type=%s", type(error).__name__)
+        return ""
+
+
 SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "18000"))
 CONSOLIDATE_PROMPT = (
     "Ngài là trợ lý tóm tắt. Hãy gộp các đoạn tóm tắt phụ sau thành một bản tóm tắt "
@@ -630,12 +667,14 @@ async def process(job: Job, x_internal_secret: str | None = Header(default=None)
             else await download_file(job.file_id or "")
         )
         if job.source_type == "image":
-            extracted, ocr_confidence = await asyncio.to_thread(ocr_image_with_confidence, raw)
+            extracted = await google_document_ocr(raw)
+            if not extracted or looks_like_ocr_failure(extracted):
+                extracted, ocr_confidence = await asyncio.to_thread(ocr_image_with_confidence, raw)
             # Confidence alone is not enough to replace OCR: generative Vision
             # models can produce fluent but spatially scrambled documents.
             # Keep Tesseract as the source of truth whenever it returned a
             # substantial document; use Vision only for an actual OCR failure.
-            if looks_like_ocr_failure(extracted):
+            if not extracted or looks_like_ocr_failure(extracted):
                 await edit_status(job, "Trợ lý Dochat đang kiểm tra lại bố cục ảnh...")
                 try:
                     repaired = await vision_repair(raw)
