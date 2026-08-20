@@ -9,7 +9,7 @@ AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
 
 [[kv_namespaces]]
 binding = "CONVERSATIONS"
-id = "2d2249374988480299ac9c02d93a9a9d"
+id = "ff3bd3ffee4a4a46975f8467b03438ea"
 
 [[queues.producers]]
 binding = "JOBS"
